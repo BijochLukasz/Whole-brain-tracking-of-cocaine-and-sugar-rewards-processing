@@ -1,1 +1,5 @@
 Repository with supplementary data to the article "Whole-brain-tracking-of-pharmacological-and-natural-rewards-processing"
+
+  Raw_Fos_and_Fos_density_data - folder containing .csv files with data about c-Fos expression calculated with Clearmap Software
+    Raw-Fos     - number of c-Fos-positive nuclei in particular structures
+    Fos-density - number of c-Fos-positive nuclei in particular structures normalized to the volume of these structures
