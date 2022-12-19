@@ -5,3 +5,5 @@ Repository with supplementary data to the article "Whole-brain-tracking-of-pharm
     Fos-density - number of c-Fos-positive nuclei in particular structures normalized to the volume of these structures
   
   Additional Figure - folder containing additional figure for Fig. Supp. 4.
+  
+  R_scripts - folder with R scripts and input data in long format for correlations graphs
