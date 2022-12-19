@@ -1,0 +1,192 @@
+---
+title: "Network analysis of cocaine data"
+output: html_document
+---
+
+Load libraries.
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(data.table)
+library(Hmisc) 
+library(pheatmap)
+library(RColorBrewer)
+library(dendextend)
+```
+
+```{r saving functions and settings}
+source('network_analysis_helper_functions.R')
+
+saving_dir="files/"
+save=FALSE #switch off for testing
+```
+
+Load data
+```{r loading}
+filtered_data<- read_csv("files/addictive_data.csv", col_types="cdff") %>%
+  bind_rows(read_csv("files/natural_data.csv", col_types="cdff"))
+
+categories<-read_csv("files/ALL_Lukasz-kategorie.csv", show_col_types = FALSE) %>%   
+  mutate(category=factor(category, levels=c("CTXpl","OLF", "HPF", "CTXsp", "STR", "PAL","TH", "HY", "MB", "P", "MY"))) %>%
+  arrange(category) %>%
+  semi_join(filtered_data)
+
+```
+
+clean up, and calculate correlation matrices for each group separately.
+
+First, extract group labels. Next, reformat data into a list of 6 dataframes corresponding to each group and calculate correlation matrices.
+```{r make list of groups}
+#names
+group_labels<-unlist(group_keys(group_by(filtered_data, group_label)))
+
+#list of dataframes for each group
+lista.danych <- filtered_data %>%
+  #left_join(categories, by="abbrev" ) %>%
+  mutate(case_id=as.character(case_id)) %>%
+  group_by(group_label, .drop=T) %>%
+  group_split(.keep=F) %>%
+  set_names(group_labels) %>%   
+  lapply( function(x) column_to_rownames(pivot_wider(x, names_from = abbrev, values_from=signal), var="case_id"))
+  
+#correlations
+lista.corr <- lapply(lista.danych, function(x) rcorr(as.matrix(x), type="pearson")$r) #spearman byłby lepszy?
+
+#reorder correlations according to anatomical order
+correlations.within.categories<-lapply(lista.corr, function(x) {
+  kolejnosc<-categories$abbrev
+  #kolejnosc<-kolejnosc[order(match(kolejnosc, lookup$abbrev))]
+  x[kolejnosc, kolejnosc]
+})
+
+categories_for_labeling <- data.frame(category=categories$category)
+row.names(categories_for_labeling)<-categories$abbrev
+```
+
+Create anatomical heatmaps (that is, arranged by the location of the brain region) for each experimental group separately.
+```{r plot anatomical heatmaps, fig.width=8,fig.height=8}
+
+
+
+#create heatmaps
+generate_anatomical_heatmap<-function(grupa) {
+  my_heatmap<-pheatmap(correlations.within.categories[[grupa]], 
+                     cluster_cols = F, cluster_rows = F,
+                     color= colorRampPalette(rev(brewer.pal(n = 7, name =  "RdBu")))(100),
+                     border_color=NA,
+                     legend = T,
+                     breaks = seq(-1, 1, length.out = 101),
+                     legend_breaks = c(-1,0,1),
+                     annotation_row = categories_for_labeling, 
+                     cellheight=3, cellwidth = 3,
+                     show_colnames = T, 
+                     show_rownames = T,
+                     fontsize = 10,
+                     fontsize_col = 2.5,
+                     fontsize_row = 2.5,
+                     main = grupa)
+}
+
+anatomical<-lapply(group_labels, generate_anatomical_heatmap)
+names(anatomical)<-group_labels
+  
+if(save) {
+  lapply(group_labels, function(x) {
+    save_pheatmap_png(anatomical[[x]], paste(saving_dir, x, sep=""), "-korelacje-anatomiczne", width=5000, height=5500, res = 280)})
+}
+```
+
+
+We want to look at how structures cluster together according to correlations, not anatomy. For this, complete euclidian distances between rows of matrix are calculated and then grouped using the hierarchical clustering algorithm.
+```{r clustered heatmap, fig.width=8,fig.height=8}
+distances<-lapply(lista.corr, function(x) {dist(x)})
+
+generate_distances_heatmap<-function(grupa, distances) {
+  my_heatmap<-pheatmap(as.matrix(distances[[grupa]]),
+                       clustering_distance_rows=distances[[grupa]],
+                       clustering_distance_cols=distances[[grupa]],
+                       color = colorRampPalette(brewer.pal(n = 7, name =  "RdYlBu"))(100),
+                       breaks = seq(0, 20, length.out = 101), #manual scale to have all groups look the same
+                       border_color=NA,
+                       cellheight=3,
+                       cellwidth = 3,
+                       show_rownames = T, fontsize_row = 2.5, 
+                       show_colnames = T, fontsize_col = 2.5,
+                       treeheight_row = 0,
+                       treeheight_col = 90,
+                       fontsize=8,
+                       main = grupa)
+  
+}
+
+
+mapy<-lapply(group_labels, generate_distances_heatmap, distances=distances)
+names(mapy)<-group_labels
+drzewa<-lapply(mapy, function(x) {as.dendrogram(x$tree_row)})
+
+if(save) {
+  lapply(group_labels, function(x) {save_pheatmap_png(mapy[[x]], paste(saving_dir, x, sep=""), "-korelacje-podobienstwo", width=5000, height=5800, res = 300)})
+}
+```
+
+This data can be more conveniently presented as a dendrogram.
+```{r generate list of heights vs clusters vectors}
+hpk<-lapply(drzewa, function(x) {heights_per_k.dendrogram(x)})
+```
+
+One way to describe a dendrogram quantitatively is to plot the number of modules vs relative height. The differences between experimental groups become clearly visible.
+```{r reshape, plot and save}
+ad=c('Saline', 'Cocaine1d', 'Cocaine7d')
+nat=c('Water', 'Sugar1d', 'Sugar7d')
+
+#convert to data table
+hpk_dt<-rbindlist(lapply(group_labels, function(x) {data.table(height=hpk[[x]], k=as.numeric(names(hpk[[x]])), group=x )}))
+hpk_dt[,relative_height:=height/max(height), by=group]
+
+#plot
+ga<-ggplot(data=hpk_dt[relative_height>0.2 & group %in% ad], aes(x=relative_height, y=k, color=group))+ geom_line(size=1)
+ga
+gn<-ggplot(data=hpk_dt[relative_height>0.2 & group %in% nat], aes(x=relative_height, y=k, color=group))+ geom_line(size=1)
+gn
+
+
+
+hpk_wide<-dcast(hpk_dt, k ~ group, value.var = "height")
+hpk_wide_odwrotnie<-dcast(hpk_dt, height ~ group, value.var = "k")
+hpk_wide_relative<-dcast(hpk_dt, k ~ group, value.var = "relative_height")
+hpk_wide_odwrotnie_relative<-dcast(hpk_dt, relative_height ~ group, value.var = "k")
+#save
+if(save) {
+  ggsave(paste(saving_dir, "ad-module-vs-height.png", sep=""), ga, "png")
+  ggsave(paste(saving_dir, "nat-module-vs-height.png", sep=""), gn, "png")
+  write.csv(hpk_wide_odwrotnie_relative, paste(saving_dir, "heights_rel.csv", sep=""), row.names = F)
+  }
+
+```
+
+Find the number of modules af half of the tree height and save to csv files.
+```{r}
+modules_half_height<-lapply(drzewa, function(x) {
+  cutree_1h.dendrogram(x, 0.5*get_branches_heights(x, decreasing = T)[1], order_clusters_as_data = F)})
+#save
+lapply(group_labels, function(x) {
+  write.csv(modules_half_height[[x]], paste(saving_dir,x, '_modules_half_height.csv', sep=''), row.names = T)})
+```
+Plot the dendrograms - dendextend package
+```{r, fig.width=12,fig.height=6}
+modules_number<-lapply(modules_half_height, function(x) {max(x)})
+
+paleta_kolorow=brewer.pal(9, 'Dark2')
+lapply(group_labels, function(x) {
+    png(paste(saving_dir, x,"-tree.png", sep=""),  width = 1200, height = 600)
+
+    p<-drzewa[[x]] %>%
+    set("branches_k_color", value = paleta_kolorow, k=modules_number[[x]]) %>% 
+    set("branches_lwd", 1.2) %>%
+    set("labels_cex", 0.4) %>%
+    set("labels_colors", value = paleta_kolorow, k=modules_number[[x]])%>%
+    plot(main=x)
+    p
+    dev.off()
+  })
+
+```

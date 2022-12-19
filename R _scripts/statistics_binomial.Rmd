@@ -1,0 +1,126 @@
+---
+title: "GLM with negative binomial"
+output: html_document
+---
+
+Code for comparing brain imaging data.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(MASS)
+library(multcomp) #for glht - general linear hypothesis test
+library(rstatix) #for multiple comparison correction
+
+```
+
+Data is loaded from csv files in long format, with abbrev being abbreviated name of the brain region as in Allen atlas.  
+
+```{r}
+categories<-read_csv("files/ALL_Lukasz-kategorie.csv", show_col_types = FALSE) %>%   mutate(category=as.factor(category))
+addictive<- read_csv("files/addictive_data.csv", col_types="cdff") %>% left_join(categories )
+natural<-  read_csv("files/natural_data.csv", col_types="cdff") %>% left_join(categories )
+```
+
+I fit a negative binomial model structure by structure. The Saline group is treated as reference.
+
+```{r model group by group addictive data}
+suppressWarnings(nb.addictive<-  addictive %>% 
+  group_by(abbrev) %>%
+  group_modify(~ broom::tidy(glm.nb(signal~group_label, data=.x))))
+nb.addictive.wyniki<-nb.addictive %>% 
+    mutate(term=gsub("group_label", "", term)) %>%
+    filter(term != "(Intercept)")
+```
+
+For "natural" experiment, Water group is reference
+
+```{r model group by group natural data}
+suppressWarnings(nb.natural<-  natural %>% 
+  group_by(abbrev) %>%
+  group_modify(~ broom::tidy(glm.nb(signal~group_label, data=.x))))
+nb.natural.wyniki<-nb.natural %>%
+      mutate(term=gsub("group_label", "", term)) %>%
+      filter(term != "(Intercept)")
+```
+
+##Testing the results 
+
+The standard multiple comparison procedure to address the many-to-one problem (ie, comparing to a single control group) is the Dunnett  test. In our case, there are m=2 comparisons.
+
+```{r addictive Dunnett test}
+suppressWarnings(addictive.D.test<-  addictive %>% 
+  group_by(abbrev) %>%
+  group_modify(~ broom::tidy(multcomp::glht(glm.nb(signal~group_label, data=.x),
+                     linfct = mcp(group_label = "Dunnett"),alternative = "greater")) #choice of two-sided causes p to double.
+               ) %>%  mutate(null.value=NULL, term=NULL) 
+)
+
+addictive.with.D<-nb.addictive.wyniki %>%
+  mutate(estimate=NULL, std.error=NULL, statistic=NULL) %>%
+ left_join(addictive.D.test %>% 
+             mutate(term=gsub(" - Saline", "", contrast), .keep="unused") %>% 
+             mutate(estimate=NULL, std.error=NULL, statistic=NULL),
+           by=c("abbrev", "term"))
+```
+
+```{r natural Dunnett test}
+suppressWarnings(natural.D.test<-  natural %>% 
+  group_by(abbrev) %>%
+  group_modify(~ broom::tidy(multcomp::glht(glm.nb(signal~group_label, data=.x),
+                     linfct = mcp(group_label = "Dunnett"),alternative = "greater")) #choice of two-sided causes p to double.
+               ) %>%  mutate(null.value=NULL, term=NULL) 
+)
+
+natural.with.D<-nb.natural.wyniki %>%
+  mutate(estimate=NULL, std.error=NULL, statistic=NULL) %>%
+ left_join(natural.D.test %>% 
+             mutate(term=gsub(" - Water", "", contrast), .keep="unused") %>% 
+             mutate(estimate=NULL, std.error=NULL, statistic=NULL),
+           by=c("abbrev", "term"))
+```
+
+Next, multiple comparison corrections are applied.
+
+```{r FDR corrections}
+addictive.with.fdr<-addictive.with.D %>% 
+  left_join(categories ) %>% 
+  relocate(category, .after=abbrev) %>%
+  group_by(term) %>%
+  rstatix::adjust_pvalue(p.col = "adj.p.value", output.col="p.fdr", method="fdr") %>%
+  relocate(term, .after=category) 
+
+natural.with.fdr<-natural.with.D %>% 
+  left_join(categories )%>% 
+  relocate(category, .after=abbrev) %>%
+  group_by(term) %>%
+  rstatix::adjust_pvalue(p.col = "adj.p.value", output.col="p.fdr", method="fdr") %>%
+  relocate(term, .after=category) 
+```
+```{r save}
+write.csv(addictive.with.fdr, "files/addictive_data_binomial.csv", row.names=F)
+write.csv(natural.with.fdr,"files/natural_data_binomial.csv",  row.names=F)
+```
+
+Optionally, generate boxplots for structures where the differences after corrections are significant
+```{r}
+boxplots.a<-addictive %>%
+  filter(abbrev %in% (addictive.with.fdr %>% filter(p.fdr<=0.05) %>% pull(abbrev)))  %>% 
+  group_by(category) %>%
+  group_map(
+    ~ggplot(data = .x, aes(x=abbrev, y=signal)) + 
+      geom_boxplot(aes(fill=group_label))+
+      scale_fill_brewer(palette = "Dark2") +
+      labs(title=.y$category))
+print(boxplots.a)
+```
+
+```{r}
+boxplots.n<-natural %>%
+  filter(abbrev %in% (natural.with.fdr %>% filter(p.fdr<=0.05) %>% pull(abbrev)))  %>% 
+  group_by(category) %>%
+  group_map(~ggplot(data = .x, aes(x=abbrev, y=signal)) + geom_boxplot(aes(fill=group_label))+
+              scale_fill_brewer(palette = "Accent")+
+              labs(title=.y$category))
+print(boxplots.n)
+```
