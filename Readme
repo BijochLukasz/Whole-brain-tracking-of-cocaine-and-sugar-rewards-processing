@@ -3,6 +3,7 @@ Repository with supplementary data to the article "Whole-brain-tracking-of-pharm
   Raw_Fos_and_Fos_density_data - folder containing .csv files with data about c-Fos expression calculated with Clearmap Software
     Raw-Fos     - number of c-Fos-positive nuclei in particular structures
     Fos-density - number of c-Fos-positive nuclei in particular structures normalized to the volume of these structures
+    VolumesFromAnnotation - information about the volume of brain structures obtained from the Annotation Atlas provided by The Allen Brain Institute  
   
   Additional Figure - folder containing additional figure for Fig. Supp. 4.
   
